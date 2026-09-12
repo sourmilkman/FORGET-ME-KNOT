@@ -7,7 +7,7 @@ let commit = process.env.GITHUB_SHA?.slice(0, 7);
 if (!commit) { try { commit = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { commit = 'local'; } }
 export default defineConfig({
   base: '/FORGET-ME-KNOT/',
-  define: { __BUILD__: JSON.stringify(`0.2.0 · ${commit}`) },
+  define: { __BUILD__: JSON.stringify(`0.2.1 · ${commit}`) },
   build: { rollupOptions: { input: { main: resolve(import.meta.dirname, 'index.html'), mum: resolve(import.meta.dirname, 'mum.html') } } },
   plugins: [react(), VitePWA({
     registerType: 'prompt', injectRegister: null,
