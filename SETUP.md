@@ -49,6 +49,10 @@ For local development, copy `.env.example` to `.env.local` and fill in the same 
 3. Tom connects his Android app with the **same email** he used on PC and unlocks with the same master password. His existing vault appears.
 4. Keep access to both email accounts available outside this vault so you can connect a new device. Do not store the only means of reaching the sign-in email inside a locked vault.
 
+### Mum's simpler app
+
+Use the full app once on Mum's phone to create her account and grant Tom helper access. Then open `/FORGET-ME-KNOT/mum.html`, install **Mum's Passwords**, and enable fingerprint or PIN unlock. Her everyday screen is read-only: choose a service, copy the username, copy the password, or open the service. Tom adds and edits her logins from his own account, and her open app refreshes from the encrypted sync service about every 30 seconds.
+
 ## 5. Give Tom access to Mum's vault
 
 1. In **Tom's account → Family access**, select **Copy my helper code**. He can also display its fingerprint.

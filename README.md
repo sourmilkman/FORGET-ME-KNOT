@@ -2,6 +2,8 @@
 
 A calm, accessible password-vault PWA for Windows and Android. Built from scratch for Tom and Mum.
 
+Two installable views are included: the full editor at `/FORGET-ME-KNOT/` for Tom, and Mum's read-only satellite at `/FORGET-ME-KNOT/mum.html`. Mum's daily view contains only a service picker plus copy username, copy password and open-service actions. Tom continues to add and maintain her logins through the encrypted shared-vault workflow.
+
 **Preview:** https://sourmilkman.github.io/FORGET-ME-KNOT/
 
 The unconfigured app opens a sample experience. Sample logins live in memory only. No real account or syncing is implied until Supabase has been configured.

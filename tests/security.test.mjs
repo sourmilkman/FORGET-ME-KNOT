@@ -4,6 +4,16 @@ import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { aes, random, seal, open, createIdentity, unlockAccount, wrapFor, unwrapFor, makeRecovery, readRecovery, wrapAccount, fingerprint, validateEntries, generatePassword } from '../src/crypto.js';
 
+test('Mum satellite exposes no vault editing or sharing operations', async () => {
+  const source = await readFile(new URL('../src/MumApp.jsx', import.meta.url), 'utf8');
+  for (const forbidden of ['saveVault', 'fmk_save_vault', 'fmk_grant_helper', 'fmk_change_master', 'Delete login', 'Edit login']) {
+    assert.equal(source.includes(forbidden), false, `Mum satellite must not contain ${forbidden}`);
+  }
+  for (const required of ['Copy username', 'Copy password', 'Open {entry.service}', 'setInterval(refresh, 30000)']) {
+    assert.equal(source.includes(required), true, `Mum satellite should contain ${required}`);
+  }
+});
+
 test('encryption rejects wrong passwords, tampering and cross-vault substitution', async () => {
   const id = crypto.randomUUID();
   const { profile, identity } = await createIdentity('four unrelated words sunset lantern', id, 'Tom');
