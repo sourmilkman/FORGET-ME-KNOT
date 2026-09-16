@@ -36,6 +36,7 @@ export default function MumApp() {
     finally { inFlight.current = false; setBusy(false); }
   };
   const accept = (snapshot, unlocked) => {
+    if (snapshot.profile && snapshot.profile.name?.trim().toLowerCase() !== 'mum') throw new Error('This is Mum’s app. Sign in with Mum’s email address.');
     setProfile(snapshot.profile); profileRef.current = snapshot.profile; setOffline(Boolean(snapshot.offline));
     if (unlocked) {
       const own = unlocked.find(item => item.owner_id === snapshot.profile.id);

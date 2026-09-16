@@ -3,10 +3,12 @@ import { aes, random, seal, open, wrapFor, unwrapFor, createIdentity, validateEn
 
 const CONFIG_KEY = 'fmk-connection-v1';
 const CACHE_KEY = 'fmk-encrypted-cache:';
+const APP_SCOPE = location.pathname.endsWith('/mum.html') ? 'mum' : 'main';
+const LAST_ACCOUNT_KEY = `fmk-last-account:${APP_SCOPE}`;
 export function offlineAccount() {
   if (navigator.onLine) return null;
   try {
-    const id = localStorage.getItem('fmk-last-account');
+    const id = localStorage.getItem(LAST_ACCOUNT_KEY);
     const cached = JSON.parse(localStorage.getItem(CACHE_KEY + id) || 'null');
     return cached?.profile?.id === id ? { ...cached, offline: true } : null;
   } catch { return null; }
@@ -28,7 +30,7 @@ export function saveConfig(url, key) {
   localStorage.setItem(CONFIG_KEY, JSON.stringify({ url: parsed.origin, key }));
 }
 const config = getConfig();
-export const client = config ? createClient(config.url, config.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } }) : null;
+export const client = config ? createClient(config.url, config.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: `fmk-auth-${APP_SCOPE}` } }) : null;
 export async function rpc(name, params = {}) {
   if (!client) throw new Error('Sync is not connected yet.');
   const { data, error } = await client.rpc(name, params);
@@ -48,7 +50,7 @@ export async function fetchSnapshot(userId, allowCache = false) {
   try {
     const snapshot = await rpc('fmk_snapshot');
     if (snapshot.profile && snapshot.profile.id !== userId) throw new Error('Account mismatch. Please sign in again.');
-    try { localStorage.setItem(CACHE_KEY + userId, JSON.stringify(snapshot)); localStorage.setItem('fmk-last-account', userId); } catch { /* online sync remains usable */ }
+    try { localStorage.setItem(CACHE_KEY + userId, JSON.stringify(snapshot)); localStorage.setItem(LAST_ACCOUNT_KEY, userId); } catch { /* online sync remains usable */ }
     return { ...snapshot, offline: false };
   } catch (error) {
     if (allowCache && !navigator.onLine) {
@@ -58,7 +60,7 @@ export async function fetchSnapshot(userId, allowCache = false) {
     throw error;
   }
 }
-export function forgetCache(userId) { localStorage.removeItem(CACHE_KEY + userId); if (localStorage.getItem('fmk-last-account') === userId) localStorage.removeItem('fmk-last-account'); }
+export function forgetCache(userId) { localStorage.removeItem(CACHE_KEY + userId); if (localStorage.getItem(LAST_ACCOUNT_KEY) === userId) localStorage.removeItem(LAST_ACCOUNT_KEY); }
 export async function decryptVaults(snapshot, identity) {
   return Promise.all(snapshot.vaults.map(async vault => {
     const rawKey = await unwrapFor(identity.privateKey, vault.wrapped_key, `vault:${vault.id}:${snapshot.profile.id}`);

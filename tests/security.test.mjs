@@ -14,6 +14,15 @@ test('Mum satellite exposes no vault editing or sharing operations', async () =>
   }
 });
 
+test('Tom and Mum apps use separate stored sign-in sessions and Mum rejects another profile', async () => {
+  const data = await readFile(new URL('../src/data.js', import.meta.url), 'utf8');
+  const mum = await readFile(new URL('../src/MumApp.jsx', import.meta.url), 'utf8');
+  assert.equal(data.includes("location.pathname.endsWith('/mum.html') ? 'mum' : 'main'"), true);
+  assert.equal(data.includes('storageKey: `fmk-auth-${APP_SCOPE}`'), true);
+  assert.equal(data.includes('LAST_ACCOUNT_KEY'), true);
+  assert.equal(mum.includes("profile.name?.trim().toLowerCase() !== 'mum'"), true);
+});
+
 test('encryption rejects wrong passwords, tampering and cross-vault substitution', async () => {
   const id = crypto.randomUUID();
   const { profile, identity } = await createIdentity('four unrelated words sunset lantern', id, 'Tom');
