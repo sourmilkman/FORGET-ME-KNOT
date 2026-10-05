@@ -20,8 +20,8 @@ async function passwordKey(password, salt) {
   const material = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: unb64(salt), iterations: ITERATIONS, hash: 'SHA-256' }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
-export async function wrapAccount(password, rawAccountKey, userId) {
-  if (password.length < 14) throw new Error('Use at least 14 characters. Four or more unrelated words are easier to remember.');
+export async function wrapAccount(password, rawAccountKey, userId, minLength = 14) {
+  if (password.length < minLength) throw new Error(minLength >= 14 ? 'Use at least 14 characters. Four or more unrelated words are easier to remember.' : `Use at least ${minLength} characters.`);
   const salt = b64(random(16));
   return { salt, iterations: ITERATIONS, wrapped: await seal(await passwordKey(password, salt), b64(rawAccountKey), `master:${userId}`) };
 }
@@ -36,14 +36,14 @@ export async function identityFromKey(rawAccountKey, profile) {
   const privateKey = await crypto.subtle.importKey('pkcs8', unb64(pkcs8), { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']);
   return { rawAccountKey, accountKey, privateKey };
 }
-export async function createIdentity(password, id, name) {
+export async function createIdentity(password, id, name, minLength = 14) {
   const rawAccountKey = random();
   const pair = await crypto.subtle.generateKey({ name: 'RSA-OAEP', modulusLength: 3072, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['encrypt', 'decrypt']);
   const profile = {
     id, name,
     public_key: b64(await crypto.subtle.exportKey('spki', pair.publicKey)),
     private_key: await seal(await aes(rawAccountKey), b64(await crypto.subtle.exportKey('pkcs8', pair.privateKey)), `identity:${id}`),
-    master: await wrapAccount(password, rawAccountKey, id),
+    master: await wrapAccount(password, rawAccountKey, id, minLength),
   };
   return { profile, identity: await identityFromKey(rawAccountKey, profile) };
 }

@@ -38,7 +38,7 @@ Optional: **Settings → Set up device unlock** for fingerprint / Windows Hello 
 
 ## 4. Create Mum's vault (from your own app)
 
-1. **Family access → Create a new family vault.** Name `Mum`, account `mum`, and a master password for her.
+1. **Family access → Create a new family vault.** Name `Mum`, account `mum`, and a master password for her. Family vaults allow a short master password (5+ characters) because she'll mostly unlock by fingerprint and you can reset it; longer is still safer. Your own stays 14+.
 2. You now see **My passwords / Mum's passwords**. Add her logins.
 3. **Connect their phone:** paste Mum's *read-only* token and press **Copy setup link**.
 4. Send Mum the link by text or WhatsApp. **Tell her the master password separately, by phone.**

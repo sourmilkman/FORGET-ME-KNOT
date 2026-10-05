@@ -10,6 +10,9 @@ const CACHE_KEY = 'fmk-encrypted-cache:';
 const LAST_ACCOUNT_KEY = `fmk-last-account:${APP_SCOPE}`;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
+// Family members (e.g. Mum) may use a shorter master password; they normally unlock by fingerprint
+// and their helper can reset it. Account owners who manage others keep the 14-character minimum.
+export const FAMILY_MIN = 5;
 const ACCOUNT = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const REPO = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/;
 
@@ -179,7 +182,7 @@ function publicProfile(profile) { const { id, name, public_key, private_key, mas
 async function newAccountFiles(config, id, name, password, helper) {
   if (!ACCOUNT.test(id)) throw new Error('Use a short account name: lowercase letters, numbers or dashes.');
   if (await readJson(config, profilePath(id))) throw new Error(`An account called “${id}” already exists.`);
-  const { profile, identity } = await createIdentity(password, id, name);
+  const { profile, identity } = await createIdentity(password, id, name, helper ? FAMILY_MIN : 14);
   const vaultId = crypto.randomUUID();
   const rawKey = random();
   const members = { [id]: { name, wrapped_key: await wrapFor(profile.public_key, rawKey, `vault:${vaultId}:${id}`) } };
@@ -218,9 +221,9 @@ export async function saveVault(vault, entries) {
   return { ...vault, body, version, entries, updated_at };
 }
 // Rewrap the same account key under a new master password (compare-and-swap on the profile file).
-export async function changeMaster(profile, rawAccountKey, password) {
+export async function changeMaster(profile, rawAccountKey, password, minLength = 14) {
   const config = getConfig();
-  const master = await wrapAccount(password, rawAccountKey, profile.id);
+  const master = await wrapAccount(password, rawAccountKey, profile.id, minLength);
   const version = await writeJson(config, profilePath(profile.id), publicProfile({ ...profile, master }), profile.version, `Change master password for ${profile.id}`);
   return { ...profile, master, version };
 }
@@ -232,7 +235,7 @@ export async function resetFamilyMaster(vault, helperProfile, helperIdentity, pa
   if (!found) throw new Error('That account could not be found.');
   const target = { ...found.value, id: vault.owner_id, version: found.sha };
   const raw = await unwrapFor(helperIdentity.privateKey, vault.recovery_key, `recovery:${vault.owner_id}:${helperProfile.id}`);
-  try { await identityFromKey(raw, target); return await changeMaster(target, raw, password); }
+  try { await identityFromKey(raw, target); return await changeMaster(target, raw, password, FAMILY_MIN); }
   finally { raw.fill(0); }
 }
 
