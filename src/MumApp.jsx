@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Check, Copy, Fingerprint, LockKeyhole, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { unlockAccount } from './crypto.js';
-import { client, fetchSnapshot, decryptVaults, createAccount, forgetCache, offlineAccount } from './data.js';
+import { DEFAULT_REPO, getConfig, saveConfig, clearConfig, consumeSetupLink, fetchSnapshot, decryptVaults, forgetCache, offlineAccount } from './data.js';
+
+let setupError = '';
+try { consumeSetupLink(); } catch (err) { setupError = 'That setup link didn’t work. Ask Tom to send a new one.'; }
+// A setup link opened while the app is already open only changes the #fragment, so pick it up and restart.
+window.addEventListener('hashchange', () => { if (location.hash.startsWith('#setup=')) { try { consumeSetupLink(); } catch { /* shown after reload */ } location.reload(); } });
 import { deviceUnlockAvailable, hasDeviceUnlock, enableDeviceUnlock, unlockWithDevice, removeDeviceUnlock } from './biometric.js';
 
 const build = __BUILD__;
@@ -18,11 +23,12 @@ function Action({ children, icon: Icon, className = '', ...props }) {
 }
 
 export default function MumApp() {
-  const [phase, setPhase] = useState(client ? 'loading' : 'unavailable');
-  const [session, setSession] = useState(null); const [profile, setProfile] = useState(null); const [identity, setIdentity] = useState(null);
+  const [config, setConfig] = useState(getConfig);
+  const [phase, setPhase] = useState(config ? 'loading' : 'unavailable');
+  const [profile, setProfile] = useState(null); const [identity, setIdentity] = useState(null);
   const [vault, setVault] = useState(null); const [entryId, setEntryId] = useState('');
-  const [email, setEmail] = useState(''); const [code, setCode] = useState(''); const [password, setPassword] = useState(''); const [confirm, setConfirm] = useState('');
-  const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [copied, setCopied] = useState(''); const [offline, setOffline] = useState(false);
+  const [password, setPassword] = useState(''); const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false); const [error, setError] = useState(setupError); const [copied, setCopied] = useState(''); const [offline, setOffline] = useState(false);
   const [deviceReady, setDeviceReady] = useState(false); const [installEvent, setInstallEvent] = useState(null);
   const inFlight = useRef(false); const identityRef = useRef(null); const profileRef = useRef(null);
   const { needRefresh: [needRefresh], updateServiceWorker } = useRegisterSW();
@@ -36,7 +42,7 @@ export default function MumApp() {
     finally { inFlight.current = false; setBusy(false); }
   };
   const accept = (snapshot, unlocked) => {
-    if (snapshot.profile && snapshot.profile.name?.trim().toLowerCase() !== 'mum') throw new Error('This is Mum’s app. Sign in with Mum’s email address.');
+    if (snapshot.profile && snapshot.profile.id !== config.account) throw new Error('This app is connected to a different account. Ask Tom for a new setup link.');
     setProfile(snapshot.profile); profileRef.current = snapshot.profile; setOffline(Boolean(snapshot.offline));
     if (unlocked) {
       const own = unlocked.find(item => item.owner_id === snapshot.profile.id);
@@ -46,23 +52,14 @@ export default function MumApp() {
   };
 
   useEffect(() => {
-    if (!client) return;
-    const cached = offlineAccount();
-    if (cached) { setSession({ user: { id: cached.profile.id } }); accept(cached); setPhase('locked'); }
+    if (!config) return;
     let alive = true;
-    if (!cached) client.auth.getSession().then(async ({ data, error: authError }) => {
-      if (!alive) return;
-      if (authError || !data.session) { setPhase('welcome'); return; }
-      setSession(data.session);
-      try { const snapshot = await fetchSnapshot(data.session.user.id, true); if (alive) { accept(snapshot); setPhase(snapshot.profile ? 'locked' : 'create'); } }
-      catch (err) { if (alive) { setError(err.message); setPhase('welcome'); } }
-    });
-    const { data: subscription } = client.auth.onAuthStateChange((event, next) => {
-      if (event === 'SIGNED_OUT') { lock(); setSession(null); setProfile(null); profileRef.current = null; setPhase('welcome'); }
-      else if (event === 'TOKEN_REFRESHED') setSession(next);
-    });
-    return () => { alive = false; subscription.subscription.unsubscribe(); };
-  }, [lock]);
+    const cached = offlineAccount();
+    if (cached?.profile?.id === config.account) { accept(cached); setPhase('locked'); return; }
+    fetchSnapshot(config.account, true).then(snapshot => { if (!alive) return; if (!snapshot.profile) { setPhase('waiting'); return; } accept(snapshot); setPhase('locked'); })
+      .catch(err => { if (alive) { setError(err.message); setPhase('locked-error'); } });
+    return () => { alive = false; };
+  }, [config]);
 
   useEffect(() => { setDeviceReady(profile ? hasDeviceUnlock(profile.id) : false); }, [profile]);
   useEffect(() => { if (!copied) return; const timer = setTimeout(() => setCopied(''), 2500); return () => clearTimeout(timer); }, [copied]);
@@ -93,7 +90,7 @@ export default function MumApp() {
   }, [phase, identity]);
 
   const unlock = device => run(async () => {
-    const snapshot = await fetchSnapshot(session.user.id, true);
+    const snapshot = await fetchSnapshot(config.account, true);
     const unlockedIdentity = device ? await unlockWithDevice(snapshot.profile) : await unlockAccount(password, snapshot.profile);
     const unlocked = await decryptVaults(snapshot, unlockedIdentity);
     identityRef.current = unlockedIdentity; setIdentity(unlockedIdentity); accept(snapshot, unlocked); setPassword(''); setPhase('vault');
@@ -106,8 +103,8 @@ export default function MumApp() {
     try { await navigator.clipboard.writeText(value); setCopied(label); } catch { setError('Copy was blocked. Press and hold the value to copy it.'); }
   };
   const signOut = () => run(async () => {
-    const id = profile?.id; const { error: authError } = await client.auth.signOut({ scope: 'local' }); if (authError) throw authError;
-    if (id) { forgetCache(id); removeDeviceUnlock(id); } setSession(null); setProfile(null); profileRef.current = null; setPhase('welcome');
+    const id = profile?.id || config?.account; clearConfig();
+    if (id) { forgetCache(id); removeDeviceUnlock(id); } setConfig(null); setProfile(null); profileRef.current = null; setPhase('unavailable');
   });
   const openUrl = entry && (/^https:\/\//i.test(entry.url || '') ? entry.url : fallbackUrls[entry.service.toLowerCase()]);
 
@@ -116,11 +113,10 @@ export default function MumApp() {
       <img className="mum-logo" src={`${import.meta.env.BASE_URL}icon.svg`} alt="" />
       <span className="mum-kicker">MUM’S PASSWORDS</span>
       {phase === 'loading' && <><h1>Opening your safe place…</h1><p>Just a moment.</p></>}
-      {phase === 'unavailable' && <><h1>Tom needs to finish setup.</h1><p>The secure sync connection is missing from this build.</p></>}
-      {phase === 'welcome' && <><h1>Let’s open your passwords.</h1><p>Enter your email. We’ll send a short sign-in code.</p><form onSubmit={e => { e.preventDefault(); run(async () => { const { error: authError } = await client.auth.signInWithOtp({ email: email.trim() }); if (authError) throw authError; setPhase('code'); }); }}><Field label="Your email"><input type="email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" required /></Field><Action className="primary" type="submit" disabled={busy}>{busy ? 'Sending…' : 'Send my code'}</Action></form></>}
-      {phase === 'code' && <><h1>Check your email.</h1><p>Enter the six-digit code we sent you.</p><form onSubmit={e => { e.preventDefault(); run(async () => { const { data, error: authError } = await client.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: 'email' }); if (authError) throw authError; const snapshot = await fetchSnapshot(data.session.user.id); setSession(data.session); accept(snapshot); setPhase(snapshot.profile ? 'locked' : 'create'); }); }}><Field label="Email code"><input value={code} onChange={e => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6,10}" required /></Field><Action className="primary" type="submit" disabled={busy}>Continue</Action></form></>}
-      {phase === 'create' && <><h1>Create Mum’s vault.</h1><p>Tom can complete this one-time step.</p><form onSubmit={e => { e.preventDefault(); run(async () => { if (password !== confirm) throw new Error('The passwords do not match.'); const made = await createAccount(session.user.id, 'Mum', password); const snapshot = await fetchSnapshot(session.user.id); const unlocked = await decryptVaults(snapshot, made.identity); identityRef.current = made.identity; setIdentity(made.identity); accept(snapshot, unlocked); setPassword(''); setConfirm(''); setPhase('vault'); }); }}><Field label="Master password"><input type="password" minLength="14" value={password} onChange={e => setPassword(e.target.value)} required /></Field><Field label="Repeat master password"><input type="password" value={confirm} onChange={e => setConfirm(e.target.value)} required /></Field><Action className="primary" type="submit" disabled={busy}>Create Mum’s vault</Action></form></>}
-      {phase === 'locked' && <><h1>Hello{profile?.name ? `, ${profile.name}` : ''}.</h1><p>Your passwords are safe and ready.</p>{deviceReady && <Action className="primary" icon={Fingerprint} onClick={() => unlock(true)} disabled={busy}>Open with fingerprint or PIN</Action>}<details open={!deviceReady}><summary>{deviceReady ? 'Use master password instead' : 'Open with master password'}</summary><form onSubmit={e => { e.preventDefault(); unlock(false); }}><Field label="Master password"><input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required /></Field><Action className={deviceReady ? '' : 'primary'} type="submit" disabled={busy}>Open my passwords</Action></form></details><button className="mum-link" onClick={signOut}>Use a different account</button></>}
+      {phase === 'unavailable' && <><h1>Tom will send you a link.</h1><p>Open the setup link Tom sends you by message. That connects this phone — you only do it once.</p><details><summary>For Tom</summary><form onSubmit={e => { e.preventDefault(); run(async () => { const saved = saveConfig({ repo: DEFAULT_REPO, account: 'mum', token }); setToken(''); setConfig(saved); setPhase('loading'); }); }}><Field label="Mum’s read-only token"><input type="password" value={token} onChange={e => setToken(e.target.value)} autoComplete="off" required /></Field><Action className="primary" type="submit" disabled={busy}>Connect</Action></form></details></>}
+      {phase === 'waiting' && <><h1>Nearly there.</h1><p>Tom hasn’t created your vault yet. Once he has, tap below.</p><Action className="primary" icon={RefreshCw} onClick={() => setConfig({ ...config })} disabled={busy}>Try again</Action></>}
+      {phase === 'locked-error' && <><h1>Can’t reach your passwords.</h1><p>Check the internet connection, then try again. If this keeps happening, call Tom.</p><Action className="primary" icon={RefreshCw} onClick={() => { setError(''); setPhase('loading'); setConfig({ ...config }); }} disabled={busy}>Try again</Action><button className="mum-link" onClick={signOut}>Disconnect this phone</button></>}
+      {phase === 'locked' && <><h1>Hello{profile?.name ? `, ${profile.name}` : ''}.</h1><p>Your passwords are safe and ready.</p>{deviceReady && <Action className="primary" icon={Fingerprint} onClick={() => unlock(true)} disabled={busy}>Open with fingerprint or PIN</Action>}<details open={!deviceReady}><summary>{deviceReady ? 'Use master password instead' : 'Open with master password'}</summary><form onSubmit={e => { e.preventDefault(); unlock(false); }}><Field label="Master password"><input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required /></Field><Action className={deviceReady ? '' : 'primary'} type="submit" disabled={busy}>Open my passwords</Action></form></details><button className="mum-link" onClick={signOut}>Disconnect this phone</button></>}
       {error && <p className="mum-error" role="alert">{error}</p>}
       {installEvent && <button className="mum-link" onClick={async () => { await installEvent.prompt(); setInstallEvent(null); }}>Install Mum’s app</button>}
       <footer><ShieldCheck size={15} /> Encrypted on this device<br />Build {build} · Build model: GPT-6 · Codex</footer>

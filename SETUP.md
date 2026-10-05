@@ -1,97 +1,74 @@
 # One-time setup for Tom
 
-The app frontend can be installed from GitHub Pages. Supabase provides verified accounts and stores encrypted vault data. GitHub Pages alone cannot sync passwords.
+Your encrypted vaults live as files in a **private** GitHub repository (`sourmilkman/fmk-vaults`). There is no server or database to keep awake. Each device gets its own GitHub token:
 
-## 1. Create your sync project
+| Device | Token access |
+|---|---|
+| Tom's PC and phone | `fmk-vaults` only · **Contents: Read and write** |
+| Mum's phone | `fmk-vaults` only · **Contents: Read-only** |
 
-1. Sign in at https://supabase.com/dashboard and create a **new** project for Forget Me Knot. Choose a nearby region and retain its database password privately.
-2. The free plan can be used for initial evaluation. Review the plan's current limits and inactivity/pausing policy before relying on it; no paid plan is required by this code.
-3. Open SQL Editor and execute the complete contents of [supabase/schema.sql](supabase/schema.sql) once. It is intended for a new project. Do not rerun it over an existing installation.
+The app code repository (`FORGET-ME-KNOT`) stays public so GitHub Pages can host it. Never commit a token to either repository.
 
-The schema deliberately denies direct table reads/writes, including to signed-in users. The application uses narrowly scoped database functions with explicit account checks. Empty results in the normal table REST API are expected.
+## 1. Vault repository
 
-## 2. Configure email verification
+Create a **private** repository called `fmk-vaults`. Leave it empty — the app creates the files. Do not make it public.
 
-1. In Authentication, enable email sign-in and allow new users to sign up for initial setup.
-2. Set Site URL to `https://sourmilkman.github.io/FORGET-ME-KNOT/`.
-3. Configure a production SMTP provider. Supabase's built-in sender is restricted and is not suitable for ordinary emails to Mum; provider signup/domain verification may be required. See the official [SMTP guide](https://supabase.com/docs/guides/auth/auth-smtp).
-4. In the **Magic Link** email template include the token itself, e.g.:
+To use a different name, set it in the app's **Vault repository** field, or set the Actions variable `VITE_VAULT_REPO` (e.g. `sourmilkman/other-name`) and re-run the deploy workflow.
 
-```html
-<h2>Your Forget Me Knot sign-in code</h2>
-<p>Enter this code in the app: {{ .Token }}</p>
-<p>If you did not request it, ignore this email.</p>
-```
+## 2. Make the tokens
 
-5. Set a short OTP expiry (for example 10 minutes). Retain the service's rate limiting. Once both accounts exist, optionally disable further signups in Supabase.
+On github.com: your profile picture → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**.
 
-The app uses `signInWithOtp` followed by `verifyOtp({ type: 'email' })`. An email-only login verifies account access but cannot decrypt the vault. A master password or prearranged recovery is still required. [Official email OTP documentation](https://supabase.com/docs/guides/auth/auth-email-passwordless).
+1. **Name:** e.g. `FMK – Tom PC`.
+2. **Expiration:** the longest option offered. Put a reminder in your calendar a week before it ends. When a token expires the app says so; make a new one and reconnect that device.
+3. **Repository access:** *Only select repositories* → `fmk-vaults`.
+4. **Permissions → Repository permissions → Contents:** *Read and write* for your devices, *Read-only* for Mum's.
+5. Generate, then copy the token (starts with `github_pat_`). GitHub shows it once.
 
-## 3. Connect the frontend
+Repeat for Mum with **Read-only**. One token per device is tidiest, because you can revoke a lost phone without touching anything else.
 
-From the project's Connect/API settings, obtain:
+## 3. Connect your devices and create your account
 
-- Project URL: `https://your-project.supabase.co`
-- **Publishable key** (`sb_publishable_...`) or legacy public **anon** key.
+1. Open <https://sourmilkman.github.io/FORGET-ME-KNOT/>.
+2. Account name `tom`, paste your token, **Connect this device**.
+3. The first time, choose your name and a master password (at least 14 characters; four unrelated words work well). This creates `profiles/tom.json` and `vaults/tom.json`.
+4. On your phone, repeat steps 1–2 with the same account name and your phone's token, then unlock with the same master password.
 
-Never copy the secret/service-role key into this app, source repository or chat.
+Optional: **Settings → Set up device unlock** for fingerprint / Windows Hello where the browser supports it.
 
-**Simplest for both devices:** in GitHub repository Settings → Secrets and variables → Actions → Variables, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Run the **Test and deploy password vault** workflow again. These values are intentionally public in the built app; access protection is in the database functions.
+## 4. Create Mum's vault (from your own app)
 
-Alternatively, select **Connect sync service** in the welcome screen and enter the two public values on each device. This does not require a rebuild.
+1. **Family access → Create a new family vault.** Name `Mum`, account `mum`, and a master password for her.
+2. You now see **My passwords / Mum's passwords**. Add her logins.
+3. **Connect their phone:** paste Mum's *read-only* token and press **Copy setup link**.
+4. Send Mum the link by text or WhatsApp. **Tell her the master password separately, by phone.**
+5. On her phone she taps the link, then opens Chrome's menu → **Add to Home screen / Install app** to get *Mum's Passwords*, enters the master password, and can turn on fingerprint unlock.
 
-For local development, copy `.env.example` to `.env.local` and fill in the same public values. `.env.local` is ignored by Git.
+The link puts the token after a `#`, which browsers never send to any server, and the app wipes it from the address bar once read. The token on her phone can only *read* ciphertext; it cannot change or delete anything.
 
-## 4. Create Tom's and Mum's accounts
+## 5. If Mum forgets her master password
 
-1. Tom enters his email, receives a code, then creates his vault with his name and a strong master password of at least 14 characters. Prefer four or more unrelated words.
-2. Mum repeats the process using **her own email address** and master password. She can use the name `Mum`.
-3. Tom connects his Android app with the **same email** he used on PC and unlocks with the same master password. His existing vault appears.
-4. Keep access to both email accounts available outside this vault so you can connect a new device. Do not store the only means of reaching the sign-in email inside a locked vault.
+**Family access → Help someone get back in → Reset password.** Choose a new one and tell her by phone. Her logins, her fingerprint unlock and your access are unchanged.
 
-### Mum's simpler app
+If **you** forget yours, nobody can reset it. Keep an **encrypted backup** (Settings → Save backup) somewhere safe, with its own password.
 
-Use the full app once on Mum's phone to create her account and grant Tom helper access. Then open `/FORGET-ME-KNOT/mum.html`, install **Mum's Passwords**, and enable fingerprint or PIN unlock. Her everyday screen is read-only: choose a service, copy the username, copy the password, or open the service. Tom adds and edits her logins from his own account, and her open app refreshes from the encrypted sync service about every 30 seconds.
+## 6. Checks before real passwords
 
-## 5. Give Tom access to Mum's vault
-
-1. In **Tom's account → Family access**, select **Copy my helper code**. He can also display its fingerprint.
-2. In **Mum's account → Family access**, paste Tom's code and select **Check helper**.
-3. Verify the name and fingerprint against Tom's app. On Mum's device, select **Give full access & recovery**.
-4. Refresh Tom's vaults. His selector now includes **My vault** and **Mum's vault**.
-
-Mum retains only her own vault. Tom can manage all of Mum's logins and generate a recovery kit for her. This first release does **not** implement revocation/key rotation; grant this only to someone you trust permanently. Removing a database membership alone is not cryptographic revocation.
-
-## 6. Recovery
-
-Tom opens **Family access → Mum's vault → Help recover**, downloads the encrypted recovery file and gives the separate code directly to Mum.
-
-Mum connects her own account through email verification, selects **Forgot your master password?**, supplies the recovery file and code, then chooses a new master password. The vault contents and Tom's existing grant are retained.
-
-The recovery file and code are a reusable recovery credential, **not a one-time link**. Together they can recover the account's encryption identity. They remain usable after a master-password change. Delete copies after use and keep them away from anyone else. Full rotation/revocation is not implemented.
-
-## 7. Install and check with sample data
-
-- **Windows:** in Chrome or Edge, use the address-bar installation button or menu → Install app.
-- **Galaxy S21 Ultra:** in Chrome, menu → Add to Home screen / Install app.
-- **Settings → Set up device unlock:** only succeeds if the browser/authenticator supports WebAuthn PRF with user verification. Windows Hello/fingerprint support is not guaranteed merely because the device has a sensor. The master password is the fallback.
-- The PWA is scoped to `/FORGET-ME-KNOT/`. Passkeys are scoped to the hosting origin, so switching domains requires enrolling them again.
-
-Before real passwords, complete an independent security review and check:
-
-1. Tom creates/edits a **made-up** login on PC; it appears on Android after Refresh (automatic refresh runs every 30 seconds while unlocked).
-2. Mum's account cannot see Tom's vault. A third test account cannot see either vault.
-3. After Mum grants access, Tom's edit appears in Mum's vault.
-4. Concurrent edits report a conflict, preserving the second device's draft until it is closed. Close, refresh and reapply it; there is no automatic merge.
-5. Wrong master passwords and wrong recovery codes fail; helper recovery with a new password works.
-6. Offline access after an online unlock shows the last saved encrypted snapshot, read only. The app cannot create accounts offline.
-7. Backups export/import correctly. Keep the backup password separately.
-8. Device unlock, installation, copy/paste and automatic locking work on your actual PC and phone.
+1. Add a **made-up** login on PC; it appears on your phone after Refresh (automatic every 30 seconds while unlocked).
+2. Mum's app shows only her vault.
+3. Edit the same login on two devices: the second save reports a conflict instead of overwriting.
+4. Wrong master passwords fail; Reset password works.
+5. Offline after one online unlock: the last encrypted copy is readable, read-only.
+6. Backups export and import.
+7. Device unlock, install, copy/paste and auto-lock work on your actual devices.
 
 ## What is stored where?
 
-The backend stores account identity/name, membership metadata, encrypted private keys, wrapped keys and encrypted vault ciphertext. Service names, usernames, passwords and notes are inside that ciphertext. Supabase Auth also holds the sign-in email.
+`fmk-vaults` holds `profiles/<account>.json` (name, public key, encrypted private key, master-password wrapping) and `vaults/<account>.json` (encrypted logins plus a wrapped key for each member). Service names, usernames, passwords and notes are only inside the ciphertext. Every save is a git commit, so earlier versions can be restored from the repository's history.
 
-The browser stores an authentication session and encrypted snapshot. It never deliberately persists plaintext login contents or the master password. Optional device unlock stores an encrypted account key bound to a passkey's PRF output.
+Each browser stores its token, an encrypted snapshot, and (optionally) an encrypted device-unlock key. **Sign out & forget this device** / **Disconnect this phone** removes those from that browser. Revoke the token on GitHub too if a device is lost.
 
-**Sign out & forget this device** removes this browser's encrypted snapshot and device-unlock wrapper and signs out the local authentication session. It does not erase clipboard history, downloaded backups, other browsers, other devices, or the OS's passkey entry.
+## Limits worth knowing
+
+- GitHub allows about 5,000 API requests per hour per GitHub account. All tokens are yours, so they share that allowance; normal use is well under 1,000.
+- Tokens expire (see step 2). Nothing else needs renewing.

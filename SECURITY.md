@@ -8,24 +8,31 @@ This implementation has not had an independent security audit. Use synthetic dat
 - Master-password key derivation: PBKDF2-HMAC-SHA-256, 600,000 iterations, random 128-bit salt. This is the Web Crypto-compatible PBKDF2 setting described by [OWASP](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html). It does not make a weak master password safe. A memory-hard KDF may be appropriate in a reviewed future version.
 - A random 256-bit account key encrypts a 3072-bit RSA-OAEP-SHA-256 private key. The password-derived key encrypts the account key. RSA is used only to wrap short random keys, with purpose/recipient-bound labels.
 - A distinct random 256-bit key encrypts each vault. Each authorized account receives an RSA-wrapped copy.
-- A helper also receives an RSA-wrapped copy of the owner's account key, enabling recovery of the existing identity. **Helper access therefore grants the owner's full encryption identity, including any other vaults shared with that owner**, not merely one password list. This is consistent with the full-account assistance model; helpers must be completely trusted.
-- Recovery exports encrypt the owner's account key under a separate 256-bit random code. The file and code together are long-lived secrets, not one-time tokens.
-- Password reset rewraps the same account key. It does not rotate the identity, revoke old recovery kits, erase previously downloaded data, or invalidate device-unlock wrappers on other devices. Online open apps check for changed master wrapping on refresh and lock, but this is not a revocation boundary.
+- A helper also receives an RSA-wrapped copy of the owner's account key, enabling recovery of the existing identity (Tom's **Reset password** rewraps Mum's account key under a new master password). **Helper access therefore grants the owner's full encryption identity, including any other vaults shared with that owner**, not merely one password list. This is consistent with the full-account assistance model; helpers must be completely trusted.
+- Password reset rewraps the same account key. It does not rotate the identity, erase previously downloaded data, or invalidate device-unlock wrappers on other devices. Online open apps check for changed master wrapping on refresh and lock, but this is not a revocation boundary.
 - Device unlock requires WebAuthn PRF output, user verification and HKDF-SHA-256 derivation of a local AES key. It does not treat an ordinary WebAuthn assertion as a decryption secret. The OS may use a device PIN rather than a fingerprint. [PRF extension documentation](https://developer.mozilla.org/en-US/docs/Web/API/Web_Authentication_API/WebAuthn_extensions).
 
 ## Authorization and storage
 
-All direct table access by `anon` and `authenticated` is revoked and RLS is enabled. Only the specific `SECURITY DEFINER` functions are executable by authenticated users. They have empty search paths, qualified object names, and check `auth.uid()` before reads/writes. The profile and account creation operation is atomic.
+Storage is a private GitHub repository holding JSON files: `profiles/<account>.json` and `vaults/<account>.json`. They contain names, public keys, encrypted private keys, master-password wrappings, wrapped vault keys and vault ciphertext — never plaintext logins or master passwords.
 
-Vault updates compare a monotonic version inside a row lock. A stale writer fails instead of overwriting newer ciphertext. Master-key updates also use compare-and-swap.
+Authorization is the GitHub token on each device, not server-side code:
 
-Only exact-ID helper lookups are supported; there is no email enumeration endpoint. The helper code includes a public-key fingerprint, checked by both the client and the grant transaction. Key distribution still trusts the served client and the managed backend. It is not a key-transparency system.
+- Tom's tokens: fine-grained, `fmk-vaults` only, Contents read/write. Anyone holding one can **change or delete** files (an integrity/availability risk), but still cannot decrypt without a master password. Git history allows restoring earlier versions.
+- Mum's token: fine-grained, `fmk-vaults` only, Contents **read-only**. A leak exposes ciphertext and names only.
+- Because confidentiality comes from the cryptography, Mum's token can technically fetch Tom's encrypted files; she cannot decrypt them, as her account holds no wrapped key for Tom's vault.
+- Tokens live in each browser's localStorage (per app: Tom's and Mum's apps use separate keys). Same-origin script compromise could read them. Revoke a lost device's token on GitHub.
+- Setup links carry a token in the URL fragment (`#setup=…`), which is not sent to servers, and the app removes it from the address bar and history immediately. Messaging apps may still keep a copy; send the master password separately.
 
-Local snapshots contain ciphertext and metadata. Supabase sessions persist to enable routine master-password-only unlock on an already connected device. Offline access is read only. Browser storage is not a substitute for a backup.
+Vault and profile writes include the file's last-seen blob SHA. GitHub rejects the write if the file has changed, so a stale device fails instead of overwriting newer ciphertext.
+
+Key distribution trusts the repository contents: someone with a write token could replace a public key. Tom's tokens are therefore as sensitive as admin access to the vaults. There is no key-transparency system.
+
+Local snapshots contain ciphertext and metadata. Offline access is read only. Browser storage is not a substitute for a backup.
 
 ## Web/app boundaries
 
-No analytics, advertising, remote fonts, third-party content, HTML injection or automatic credential filling. React renders user text as text. External links are HTTPS-only and open with `noreferrer`. A restrictive CSP blocks arbitrary scripts and limits connections to Supabase. The service worker precaches the app shell, not API calls.
+No analytics, advertising, remote fonts, third-party content, HTML injection or automatic credential filling. React renders user text as text. External links are HTTPS-only and open with `noreferrer`. A restrictive CSP blocks arbitrary scripts and limits connections to `api.github.com`. The service worker precaches the app shell, not API calls.
 
 There is no secure zeroization guarantee in JavaScript. Locking removes decrypted state, editor/recovery dialogs and identity references. Hidden passwords hide after 15 seconds; the vault locks after 5 minutes of inactivity or 60 seconds hidden. Clipboard contents are controlled by the OS; the app does not promise to erase clipboard history or overwrite unrelated clipboard contents.
 
@@ -35,6 +42,6 @@ The current first version lacks cryptographic helper revocation, identity rotati
 
 ## Tests
 
-`npm test` verifies encryption/decryption, wrong passwords, tamper detection, cross-context rejection, account isolation, anonymous denial, direct-table denial, owner-only grants, recipient-key checks, helper decryption, write conflict detection and helper recovery in an embedded real PostgreSQL instance. Live Supabase Auth, SMTP, real network failure cases and physical authenticators need separate verification.
+`npm test` verifies encryption/decryption, wrong passwords, tamper detection, cross-context rejection, setup-link handling, account isolation, read-only token write denial, stale-write conflicts, helper access, helper password reset, expired/revoked tokens, ciphertext-only offline cache, and that no GitHub token or Supabase reference is committed. The GitHub API is simulated in memory; live checks on the real repository and devices are still required.
 
 No private vulnerability information or real credentials should be posted to the public GitHub repository.
