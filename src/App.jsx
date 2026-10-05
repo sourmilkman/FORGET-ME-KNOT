@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { KeyRound, ShieldCheck, UsersRound, Settings2, Search, Plus, Copy, Check, Eye, EyeOff, LockKeyhole, LogOut, ArrowRight, ArrowUpRight, X, RefreshCw, Download, Fingerprint, ChevronDown, CircleHelp, Trash2, Pencil, Sparkles, WifiOff, MonitorSmartphone, CheckCircle2 } from 'lucide-react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { aes, seal, open, random, unb64, wrapAccount, unlockAccount, generatePassword, validateEntries } from './crypto.js';
-import { DEFAULT_REPO, getConfig, saveConfig, clearConfig, consumeSetupLink, makeSetupLink, fetchSnapshot, decryptVaults, createAccount, createFamilyAccount, resetFamilyMaster, saveVault, sampleVaults, forgetCache, offlineAccount } from './data.js';
+import { DEFAULT_REPO, getConfig, saveConfig, clearConfig, consumeSetupLink, makeSetupLink, fetchSnapshot, decryptVaults, createAccount, createFamilyAccount, resetFamilyMaster, FAMILY_MIN, saveVault, sampleVaults, forgetCache, offlineAccount } from './data.js';
 import { deviceUnlockAvailable, hasDeviceUnlock, enableDeviceUnlock, unlockWithDevice, removeDeviceUnlock } from './biometric.js';
 
 const services = ['Google', 'Facebook', 'Instagram', 'LINE', 'Outlook', 'Amazon', 'Apple', 'Netflix', 'PayPal', 'WhatsApp', 'Other'];
@@ -49,9 +49,9 @@ function FamilyCreate({ busy, onCreate }) {
   return <form onSubmit={e => { e.preventDefault(); onCreate(name.trim(), account.trim().toLowerCase(), password, confirm, () => { setPassword(''); setConfirm(''); }); }}>
     <label>Their name<input value={name} onChange={e => setName(e.target.value)} maxLength={60} required /></label>
     <label>Account name<input value={account} onChange={e => setAccount(e.target.value)} maxLength={32} required autoCapitalize="none" spellCheck={false} /></label>
-    <PasswordInput label="Their master password" id="family-password" value={password} onChange={e => setPassword(e.target.value)} minLength={14} autoComplete="new-password" required />
+    <PasswordInput label="Their master password" id="family-password" value={password} onChange={e => setPassword(e.target.value)} minLength={FAMILY_MIN} autoComplete="new-password" required />
     <PasswordInput label="Repeat their master password" id="family-confirm" value={confirm} onChange={e => setConfirm(e.target.value)} autoComplete="new-password" required />
-    <p className="caption">At least 14 characters. Tell them this password in person or by phone, never in the same message as their setup link.</p>
+    <p className="caption">At least {FAMILY_MIN} characters — longer is safer, and they’ll mostly use fingerprint unlock anyway. Tell them by phone, never in the same message as their setup link.</p>
     <Button className="primary full" type="submit" disabled={busy} icon={Plus}>{busy ? 'Creating…' : `Create ${name.trim() || 'their'} vault`}</Button>
   </form>;
 }
@@ -64,7 +64,7 @@ function SetupLinkForm({ busy, account, onMake }) {
 }
 function ResetForm({ vault, busy, error, onReset, onClose }) {
   const [password, setPassword] = useState(''); const [confirm, setConfirm] = useState('');
-  return <Modal title={`Reset ${vault.owner.name}’s master password`} onClose={onClose} busy={busy}><p>Choose a new master password for {vault.owner.name}. Their logins, fingerprint unlock and your access stay as they are.</p><form onSubmit={e => { e.preventDefault(); onReset(password, confirm); }}><PasswordInput id="reset-password" label="New master password" minLength={14} value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" required /><PasswordInput id="reset-confirm" label="Repeat new password" value={confirm} onChange={e => setConfirm(e.target.value)} autoComplete="new-password" required /><p className="caption">At least 14 characters. Tell {vault.owner.name} by phone or in person.</p>{error && <p className="error" role="alert">{error}</p>}<Button className="primary full" disabled={busy} type="submit">{busy ? 'Saving…' : 'Set new master password'}</Button></form></Modal>;
+  return <Modal title={`Reset ${vault.owner.name}’s master password`} onClose={onClose} busy={busy}><p>Choose a new master password for {vault.owner.name}. Their logins, fingerprint unlock and your access stay as they are.</p><form onSubmit={e => { e.preventDefault(); onReset(password, confirm); }}><PasswordInput id="reset-password" label="New master password" minLength={FAMILY_MIN} value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" required /><PasswordInput id="reset-confirm" label="Repeat new password" value={confirm} onChange={e => setConfirm(e.target.value)} autoComplete="new-password" required /><p className="caption">At least {FAMILY_MIN} characters. Tell {vault.owner.name} by phone or in person.</p>{error && <p className="error" role="alert">{error}</p>}<Button className="primary full" disabled={busy} type="submit">{busy ? 'Saving…' : 'Set new master password'}</Button></form></Modal>;
 }
 function EntryEditor({ entry, busy, onSave, onDelete, onClose, error, demo }) {
   const [draft, setDraft] = useState(entry || blankEntry);

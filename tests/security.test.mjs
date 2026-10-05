@@ -196,3 +196,19 @@ test('GitHub storage: accounts, family access, read-only devices, conflicts and 
 
   assert.equal(commits.length >= 6, true, 'every write is a commit, so history is kept');
 });
+
+test('family vaults accept a 5-character master password; owners still need 14', async () => {
+  files.clear();
+  connect('tom', TOM);
+  await assert.rejects(data.createAccount('tom', 'Tom', 'short'), /at least 14/);
+  const tom = await data.createAccount('tom', 'Tom', 'Tom has four unrelated words here');
+  await assert.rejects(data.createFamilyAccount(tom, 'mum', 'Mum', 'abcd'), /at least 5/);
+  await data.createFamilyAccount(tom, 'mum', 'Mum', 'rose1');
+  const snap = await data.fetchSnapshot('tom');
+  const tomId = await unlockAccount('Tom has four unrelated words here', snap.profile);
+  const mumVault = snap.vaults.find(v => v.owner_id === 'mum');
+  await assert.rejects(data.resetFamilyMaster(mumVault, snap.profile, tomId, 'abc'), /at least 5/);
+  await data.resetFamilyMaster(mumVault, snap.profile, tomId, 'lily2');
+  connect('mum', MUM);
+  await unlockAccount('lily2', (await data.fetchSnapshot('mum')).profile);
+});
