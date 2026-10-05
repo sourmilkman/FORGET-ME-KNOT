@@ -1,31 +1,84 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { PGlite } from '@electric-sql/pglite';
-import { aes, random, seal, open, createIdentity, unlockAccount, wrapFor, unwrapFor, makeRecovery, readRecovery, wrapAccount, fingerprint, validateEntries, generatePassword } from '../src/crypto.js';
+import { readFile, readdir } from 'node:fs/promises';
+import { aes, random, seal, open, createIdentity, unlockAccount, unwrapFor, validateEntries, generatePassword } from '../src/crypto.js';
 
-test('Mum satellite exposes no vault editing or sharing operations', async () => {
+// ---- browser globals the sync layer expects ----
+const store = new Map();
+globalThis.localStorage = { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) };
+globalThis.location = { pathname: '/FORGET-ME-KNOT/', search: '', hash: '' };
+globalThis.history = { replaceState: (_s, _t, url) => { globalThis.location.hash = ''; globalThis.lastReplaced = url; } };
+Object.defineProperty(globalThis.navigator, 'onLine', { configurable: true, get: () => online });
+let online = true;
+
+// ---- in-memory stand-in for the GitHub contents API ----
+const TOM = 'github_pat_' + 'T'.repeat(40);
+const MUM = 'github_pat_' + 'M'.repeat(40);
+const STRANGER = 'github_pat_' + 'S'.repeat(40);
+const files = new Map();
+const commits = [];
+let counter = 0;
+const reply = (status, body) => ({ status, ok: status < 300, json: async () => body });
+globalThis.fetch = async (url, { method = 'GET', headers = {}, body } = {}) => {
+  const token = headers.Authorization?.replace('Bearer ', '');
+  const match = /^https:\/\/api\.github\.com\/repos\/sourmilkman\/fmk-vaults\/contents\/(.+)$/.exec(url);
+  if (![TOM, MUM].includes(token)) return reply(token === STRANGER ? 404 : 401, { message: 'Bad credentials' });
+  if (url === 'https://api.github.com/repos/sourmilkman/fmk-vaults') return reply(200, { private: true });
+  if (!match) return reply(404, { message: 'Not Found' });
+  const path = match[1];
+  if (method === 'GET') {
+    if (files.has(path)) return reply(200, { type: 'file', encoding: 'base64', content: files.get(path).content.replace(/(.{60})/g, '$1\n'), sha: files.get(path).sha });
+    const children = [...files.keys()].filter(p => p.startsWith(path + '/')).map(p => ({ type: 'file', name: p.split('/').pop(), path: p, sha: files.get(p).sha }));
+    return children.length ? reply(200, children) : reply(404, { message: 'Not Found' });
+  }
+  if (method === 'PUT') {
+    if (token !== TOM) return reply(403, { message: 'Resource not accessible by personal access token' });
+    const { content, sha, message } = JSON.parse(body);
+    const current = files.get(path);
+    if (current && !sha) return reply(422, { message: 'Invalid request. "sha" wasn\'t supplied.' });
+    if (current && sha !== current.sha) return reply(409, { message: `${path} does not match ${sha}` });
+    if (!current && sha) return reply(422, { message: 'sha does not match' });
+    const next = { content, sha: `sha${++counter}` };
+    files.set(path, next); commits.push(message);
+    return reply(current ? 200 : 201, { content: { sha: next.sha } });
+  }
+  return reply(405, { message: 'Method not allowed' });
+};
+
+const data = await import('../src/data.js');
+const connect = (account, token) => data.saveConfig({ repo: 'sourmilkman/fmk-vaults', account, token });
+const plain = path => JSON.parse(Buffer.from(files.get(path).content, 'base64').toString('utf8'));
+
+test('Mum satellite exposes no vault editing, sharing or account creation', async () => {
   const source = await readFile(new URL('../src/MumApp.jsx', import.meta.url), 'utf8');
-  for (const forbidden of ['saveVault', 'fmk_save_vault', 'fmk_grant_helper', 'fmk_change_master', 'Delete login', 'Edit login']) {
+  for (const forbidden of ['saveVault', 'createAccount', 'createFamilyAccount', 'changeMaster', 'resetFamilyMaster', 'makeSetupLink', 'Delete login', 'Edit login']) {
     assert.equal(source.includes(forbidden), false, `Mum satellite must not contain ${forbidden}`);
   }
-  for (const required of ['Copy username', 'Copy password', 'Open {entry.service}', 'setInterval(refresh, 30000)']) {
+  for (const required of ['Copy username', 'Copy password', 'Open {entry.service}', 'setInterval(refresh, 30000)', 'snapshot.profile.id !== config.account']) {
     assert.equal(source.includes(required), true, `Mum satellite should contain ${required}`);
   }
 });
 
-test('Tom and Mum apps use separate stored sign-in sessions and Mum rejects another profile', async () => {
-  const data = await readFile(new URL('../src/data.js', import.meta.url), 'utf8');
-  const mum = await readFile(new URL('../src/MumApp.jsx', import.meta.url), 'utf8');
-  assert.equal(data.includes("location.pathname.endsWith('/mum.html') ? 'mum' : 'main'"), true);
-  assert.equal(data.includes('storageKey: `fmk-auth-${APP_SCOPE}`'), true);
-  assert.equal(data.includes('LAST_ACCOUNT_KEY'), true);
-  assert.equal(mum.includes("profile.name?.trim().toLowerCase() !== 'mum'"), true);
+test('Tom and Mum apps keep separate stored connections', async () => {
+  const source = await readFile(new URL('../src/data.js', import.meta.url), 'utf8');
+  assert.equal(source.includes("location.pathname.endsWith('/mum.html') ? 'mum' : 'main'"), true);
+  assert.equal(source.includes('`fmk-github-v1:${APP_SCOPE}`'), true);
+});
+
+test('no Supabase code and no GitHub tokens are committed to the source', async () => {
+  const roots = ['src', 'public', '.github/workflows'];
+  const paths = ['index.html', 'mum.html', 'package.json', 'vite.config.js', '.env.example'];
+  for (const root of roots) for (const name of await readdir(new URL(`../${root}`, import.meta.url), { recursive: true })) paths.push(`${root}/${name}`);
+  for (const path of paths) {
+    if (/\.(png|ico)$/.test(path)) continue;
+    let text; try { text = await readFile(new URL(`../${path}`, import.meta.url), 'utf8'); } catch { continue; }
+    assert.equal(/(github_pat_|ghp_)[A-Za-z0-9_]{20,}/.test(text), false, `${path} looks like it contains a GitHub token`);
+    assert.equal(/supabase/i.test(text), false, `${path} still mentions Supabase`);
+  }
 });
 
 test('encryption rejects wrong passwords, tampering and cross-vault substitution', async () => {
-  const id = crypto.randomUUID();
-  const { profile, identity } = await createIdentity('four unrelated words sunset lantern', id, 'Tom');
+  const { profile, identity } = await createIdentity('four unrelated words sunset lantern', 'tom', 'Tom');
   assert.equal(JSON.stringify(profile).includes('sunset lantern'), false);
   const again = await unlockAccount('four unrelated words sunset lantern', profile);
   assert.deepEqual(again.rawAccountKey, identity.rawAccountKey);
@@ -45,94 +98,101 @@ test('encryption rejects wrong passwords, tampering and cross-vault substitution
   assert.notEqual(generatePassword(), generatePassword());
 });
 
-test('real PostgreSQL authorization, family sharing, recovery and optimistic concurrency', async t => {
-  const db = new PGlite();
-  try {
-    await db.exec(`create schema auth; create role anon; create role authenticated;
-      create table auth.users(id uuid primary key);
-      create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
-      grant usage on schema auth, public to anon, authenticated; grant execute on function auth.uid() to anon, authenticated;`);
-    await db.exec(await readFile(new URL('../supabase/schema.sql', import.meta.url), 'utf8'));
-    const people = {};
-    for (const name of ['Tom', 'Mum', 'Stranger']) {
-      const id = crypto.randomUUID(); const vaultId = crypto.randomUUID(); const raw = random();
-      const created = await createIdentity(`${name} has four unrelated words here`, id, name);
-      people[name] = { ...created, id, vaultId, raw };
-      await db.query('insert into auth.users values ($1)', [id]);
-    }
-    const call = async (person, fn, args = [], casts = []) => {
-      await db.exec('reset role');
-      await db.query("select set_config('request.jwt.claim.sub', $1, false)", [person?.id || '']);
-      await db.exec(`set role ${person ? 'authenticated' : 'anon'}`);
-      try { return (await db.query(`select public.${fn}(${args.map((_, i) => `$${i + 1}${casts[i] ? '::' + casts[i] : ''}`).join(',')}) as result`, args)).rows[0].result; }
-      finally { await db.exec('reset role'); }
-    };
-    for (const person of Object.values(people)) {
-      const body = await seal(await aes(person.raw), [], `vault:${person.vaultId}`);
-      const wrapped = await wrapFor(person.profile.public_key, person.raw, `vault:${person.vaultId}:${person.id}`);
-      await call(person, 'fmk_create_account', [person.profile.name, person.profile.public_key, person.profile.private_key, person.profile.master, person.vaultId, body, wrapped], ['text','text','jsonb','jsonb','uuid','jsonb','text']);
-    }
-    const { Tom, Mum, Stranger } = people;
-    await t.test('each account sees only its own vault; anonymous has no access', async () => {
-      for (const person of Object.values(people)) {
-        const data = await call(person, 'fmk_snapshot'); assert.equal(data.profile.id, person.id); assert.deepEqual(data.vaults.map(v => v.id), [person.vaultId]);
-      }
-      await assert.rejects(call(null, 'fmk_snapshot'), /permission denied/);
-      await db.exec('set role authenticated');
-      await assert.rejects(db.query('select * from public.fmk_vaults'), /permission denied/);
-      await assert.rejects(db.query('update public.fmk_profiles set name = $1', ['Bad']), /permission denied/);
-      await db.exec('reset role');
-    });
-    const tomWrap = await wrapFor(Tom.profile.public_key, Mum.raw, `vault:${Mum.vaultId}:${Tom.id}`);
-    const recoverWrap = await wrapFor(Tom.profile.public_key, Mum.identity.rawAccountKey, `recovery:${Mum.id}:${Tom.id}`);
-    const sharingArgs = [Mum.vaultId, Tom.id, Tom.profile.public_key, tomWrap, recoverWrap];
-    const sharingCasts = ['uuid', 'uuid', 'text', 'text', 'text'];
-    await t.test('only Mum can authorize Tom; incorrect recipient key is rejected', async () => {
-      await assert.rejects(call(Tom, 'fmk_grant_helper', sharingArgs, sharingCasts), /Only the vault owner/);
-      await assert.rejects(call(Stranger, 'fmk_grant_helper', sharingArgs, sharingCasts), /Only the vault owner/);
-      await assert.rejects(call(Mum, 'fmk_grant_helper', [Mum.vaultId, Tom.id, Stranger.profile.public_key, tomWrap, recoverWrap], sharingCasts), /helper key has changed/);
-      await call(Mum, 'fmk_grant_helper', sharingArgs, sharingCasts);
-      assert.equal((await call(Mum, 'fmk_snapshot')).helpers[0].id, Tom.id);
-      assert.equal((await call(Mum, 'fmk_snapshot')).vaults.length, 1);
-      assert.equal((await call(Stranger, 'fmk_snapshot')).vaults.length, 1);
-    });
-    await t.test('Tom decrypts Mum’s vault; Mum cannot decrypt Tom’s vault', async () => {
-      const data = await call(Tom, 'fmk_snapshot'); assert.equal(data.vaults.length, 2);
-      const shared = data.vaults.find(v => v.owner_id === Mum.id);
-      const raw = await unwrapFor(Tom.identity.privateKey, shared.wrapped_key, `vault:${Mum.vaultId}:${Tom.id}`);
-      assert.deepEqual(raw, Mum.raw);
-      await assert.rejects(unwrapFor(Mum.identity.privateKey, shared.wrapped_key, `vault:${Mum.vaultId}:${Tom.id}`));
-      await assert.rejects(unwrapFor(Tom.identity.privateKey, shared.wrapped_key, `vault:${Tom.vaultId}:${Tom.id}`));
-      assert.notEqual(await fingerprint(Mum.profile.public_key), await fingerprint(Tom.profile.public_key));
-    });
-    await t.test('Tom can edit Mum’s vault; stale device writes cannot overwrite changes', async () => {
-      const item = { id: 'google', service: 'Google', username: 'mum@example.com', password: 'Secret password 123', url: '', notes: '' };
-      const body = await seal(await aes(Mum.raw), [item], `vault:${Mum.vaultId}`);
-      assert.equal(await call(Tom, 'fmk_save_vault', [Mum.vaultId, 1, body], ['uuid', 'integer', 'jsonb']), 2);
-      await assert.rejects(call(Mum, 'fmk_save_vault', [Mum.vaultId, 1, body], ['uuid', 'integer', 'jsonb']), /VERSION_CONFLICT/);
-      await assert.rejects(call(Stranger, 'fmk_save_vault', [Mum.vaultId, 2, body], ['uuid', 'integer', 'jsonb']), /Access denied/);
-      const snapshot = await call(Mum, 'fmk_snapshot');
-      assert.deepEqual(await open(await aes(Mum.raw), snapshot.vaults[0].body, `vault:${Mum.vaultId}`), [item]);
-      const empty = await seal(await aes(Mum.raw), [], `vault:${Mum.vaultId}`);
-      assert.equal(await call(Tom, 'fmk_save_vault', [Mum.vaultId, 2, empty], ['uuid', 'integer', 'jsonb']), 3);
-    });
-    await t.test('helper recovery restores Mum’s account without revealing Tom’s vault', async () => {
-      const recoveredRaw = await unwrapFor(Tom.identity.privateKey, recoverWrap, `recovery:${Mum.id}:${Tom.id}`);
-      const kit = await makeRecovery(recoveredRaw, Mum.id);
-      assert.equal(JSON.stringify(kit.file).includes(kit.code), false);
-      await assert.rejects(readRecovery(kit.file, kit.code, Tom.profile), /different account/);
-      await assert.rejects(readRecovery(kit.file, kit.code.slice(1), Mum.profile));
-      const restored = await readRecovery(kit.file, kit.code, Mum.profile);
-      assert.deepEqual(restored.rawAccountKey, Mum.identity.rawAccountKey);
-      const master = await wrapAccount('a completely different master password', restored.rawAccountKey, Mum.id);
-      // A helper cannot change the owner's profile using their own session.
-      await assert.rejects(call(Tom, 'fmk_change_master', [Mum.profile.master, master], ['jsonb', 'jsonb']), /Account changed/);
-      await call(Mum, 'fmk_change_master', [Mum.profile.master, master], ['jsonb', 'jsonb']);
-      const fresh = await call(Mum, 'fmk_snapshot');
-      await unlockAccount('a completely different master password', fresh.profile);
-      await assert.rejects(unlockAccount('Mum has four unrelated words here', fresh.profile));
-      assert.equal(fresh.vaults.length, 1);
-      assert.deepEqual((await call(Tom, 'fmk_snapshot')).profile.master, Tom.profile.master);
-    });
-  } finally { await db.close(); }
+test('connection checks and setup links', () => {
+  assert.throws(() => data.checkConfig({ repo: 'sourmilkman/fmk-vaults', account: 'Tom!', token: TOM }), /account name/);
+  assert.throws(() => data.checkConfig({ repo: 'nope', account: 'tom', token: TOM }), /owner\/name/);
+  assert.throws(() => data.checkConfig({ repo: 'a/b', account: 'tom', token: 'sb_publishable_x' }), /github_pat_/);
+  const link = data.makeSetupLink('https://sourmilkman.github.io/FORGET-ME-KNOT/mum.html', { account: 'mum', token: MUM });
+  assert.equal(link.includes('?'), false, 'token must travel in the fragment, never the query string');
+  assert.deepEqual(data.readSetupLink(new URL(link).hash), { repo: 'sourmilkman/fmk-vaults', account: 'mum', token: MUM });
+  location.hash = new URL(link).hash;
+  assert.equal(data.consumeSetupLink(), true);
+  assert.equal(location.hash, '', 'setup link is removed from the address bar');
+  assert.equal(data.getConfig().account, 'mum');
+  data.clearConfig();
+  assert.equal(data.getConfig(), null);
+});
+
+test('GitHub storage: accounts, family access, read-only devices, conflicts and recovery', async t => {
+  const tomPw = 'Tom has four unrelated words here';
+  const mumPw = 'Mum has four unrelated words here';
+  connect('tom', TOM);
+  assert.equal((await data.fetchSnapshot('tom')).profile, null, 'new account starts without a profile');
+  const tom = await data.createAccount('tom', 'Tom', tomPw);
+  await data.createFamilyAccount(tom, 'mum', 'Mum', mumPw);
+  await assert.rejects(data.createFamilyAccount(tom, 'mum', 'Mum', mumPw), /already exists/);
+  await assert.rejects(data.createFamilyAccount(tom, 'tom', 'Tom', mumPw), /different account name/);
+
+  await t.test('only ciphertext, public keys and names are stored', () => {
+    const everything = [...files.values()].map(f => Buffer.from(f.content, 'base64').toString('utf8')).join('\n');
+    for (const secret of [tomPw, mumPw]) assert.equal(everything.includes(secret), false);
+    assert.deepEqual([...files.keys()].sort(), ['profiles/mum.json', 'profiles/tom.json', 'vaults/mum.json', 'vaults/tom.json']);
+    assert.deepEqual(Object.keys(plain('vaults/tom.json').members), ['tom']);
+    assert.deepEqual(Object.keys(plain('vaults/mum.json').members).sort(), ['mum', 'tom']);
+  });
+
+  let tomVaults;
+  await t.test('Tom sees both vaults; Mum sees only hers and cannot decrypt Tom’s', async () => {
+    const snap = await data.fetchSnapshot('tom');
+    tomVaults = await data.decryptVaults(snap, await unlockAccount(tomPw, snap.profile));
+    assert.deepEqual(tomVaults.map(v => v.owner_id), ['tom', 'mum']);
+    connect('mum', MUM);
+    const mumSnap = await data.fetchSnapshot('mum');
+    assert.deepEqual(mumSnap.vaults.map(v => v.owner_id), ['mum']);
+    assert.deepEqual(mumSnap.helpers, [{ id: 'tom', name: 'Tom' }]);
+    const mumId = await unlockAccount(mumPw, mumSnap.profile);
+    const tomFile = plain('vaults/tom.json');
+    await assert.rejects(unwrapFor(mumId.privateKey, tomFile.members.tom.wrapped_key, `vault:${tomFile.id}:tom`));
+    await assert.rejects(unlockAccount(tomPw, mumSnap.profile));
+  });
+
+  await t.test('Tom edits Mum’s vault and Mum sees it; Mum’s read-only token cannot write', async () => {
+    connect('tom', TOM);
+    const mumVault = tomVaults.find(v => v.owner_id === 'mum');
+    const item = { id: 'google', service: 'Google', username: 'mum@example.com', password: 'Secret password 123', url: '', notes: '' };
+    const saved = await data.saveVault(mumVault, [item]);
+    connect('mum', MUM);
+    const mumSnap = await data.fetchSnapshot('mum');
+    const [mine] = await data.decryptVaults(mumSnap, await unlockAccount(mumPw, mumSnap.profile));
+    assert.deepEqual(mine.entries, [item]);
+    await assert.rejects(data.saveVault(mine, []), /not allowed to make that change/);
+    connect('tom', TOM);
+    // a second Tom device still holding the old version is refused
+    await assert.rejects(data.saveVault(mumVault, []), err => err.conflict === true);
+    await data.saveVault(saved, [item, { ...item, id: 'line', service: 'LINE' }]);
+  });
+
+  await t.test('Tom resets Mum’s forgotten master password; her identity is unchanged', async () => {
+    const snap = await data.fetchSnapshot('tom');
+    const tomId = await unlockAccount(tomPw, snap.profile);
+    const mumVault = snap.vaults.find(v => v.owner_id === 'mum');
+    const before = (await data.fetchSnapshot('tom')).profile;
+    await data.resetFamilyMaster(mumVault, snap.profile, tomId, 'a completely different master password');
+    connect('mum', MUM);
+    const fresh = await data.fetchSnapshot('mum');
+    const restored = await unlockAccount('a completely different master password', fresh.profile);
+    await assert.rejects(unlockAccount(mumPw, fresh.profile));
+    const [mine] = await data.decryptVaults(fresh, restored);
+    assert.equal(mine.entries.length, 2);
+    connect('tom', TOM);
+    assert.deepEqual((await data.fetchSnapshot('tom')).profile.master, before.master, 'Tom’s own profile is untouched');
+    // Mum's own vault has no recovery entry for her, so she can never reset Tom.
+    assert.equal(plain('vaults/tom.json').members.mum, undefined);
+  });
+
+  await t.test('expired, revoked or wrong tokens fail clearly; offline uses the encrypted cache', async () => {
+    connect('tom', 'github_pat_' + 'X'.repeat(40));
+    await assert.rejects(data.fetchSnapshot('tom'), /expired or been revoked/);
+    connect('tom', STRANGER);
+    await assert.rejects(data.fetchSnapshot('tom'), /could not be found/);
+    connect('tom', TOM);
+    await data.fetchSnapshot('tom');
+    online = false;
+    const cached = await data.fetchSnapshot('tom', true);
+    assert.equal(cached.offline, true);
+    assert.equal(JSON.stringify(cached).includes('Secret password 123'), false, 'cache holds ciphertext only');
+    online = true;
+  });
+
+  assert.equal(commits.length >= 6, true, 'every write is a commit, so history is kept');
 });
